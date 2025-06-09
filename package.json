@@ -3,12 +3,14 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "scripts": {
+ "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "lint": "eslint .",
     "preview": "vite preview",
-    "start-api": "python3 api/app.py"
+    "server": "python ./api/app.py",
+    "start-api": "python3 api/app.py",
+    "lint": "eslint .",
+    "dev:both": "concurrently \"npm run dev\" \"npm run server\""
   },
   "dependencies": {
     "axios": "^1.6.7",
