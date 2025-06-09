@@ -1,23 +1,33 @@
-// src/components/AnalysisResults.tsx
-
-import { CheckCircle, AlertTriangle, InfoIcon, Percent } from 'lucide-react'; // Tambahkan Percent
+import { CheckCircle, AlertTriangle, InfoIcon, Percent, Eye, Activity } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
-// Sesuaikan dengan output baru dari app.py
-export interface UnetApiResponse {
+export interface MultiClassApiResponse {
   processed_image: string;
   detected_class: string;
-  anomaly_percentage: number; // Persentase anomali umum
-  // class_percentages?: { // Opsional, untuk masa depan jika ada model multi-kelas
-  //   tooth?: number;
-  //   caries?: number;
-  //   cavity?: number;
-  //   crack?: number;
-  // };
+  severity: 'healthy' | 'mild' | 'moderate' | 'severe';
+  class_percentages: {
+    tooth: number;
+    caries: number;
+    cavity: number;
+    crack: number;
+  };
+  class_pixel_counts: {
+    tooth: number;
+    caries: number;
+    cavity: number;
+    crack: number;
+  };
+  dominant_condition: string;
+  legend: {
+    tooth: string;
+    caries: string;
+    cavity: string;
+    crack: string;
+  };
 }
 
 interface AnalysisResultsProps {
-  prediction?: UnetApiResponse;
+  prediction?: MultiClassApiResponse;
   originalImageUrl?: string;
   isLoading: boolean;
   error?: string | null;
@@ -38,7 +48,6 @@ const AnalysisResults = ({ prediction, originalImageUrl, isLoading, error }: Ana
   }, [isLoading, prediction, error]);
 
   if (isLoading || (!showContent && !error && !prediction)) {
-    // ... (kode loading sama seperti sebelumnya) ...
     return (
       <div className="flex justify-center items-center p-12 min-h-[300px]">
         <div className="text-center">
@@ -51,7 +60,6 @@ const AnalysisResults = ({ prediction, originalImageUrl, isLoading, error }: Ana
   }
 
   if (error) {
-    // ... (kode error sama seperti sebelumnya) ...
     return (
       <div className="flex flex-col justify-center items-center p-8 text-center bg-red-50 border border-red-200 rounded-lg min-h-[300px]">
         <AlertTriangle size={48} className="text-red-500 mb-4" />
@@ -66,7 +74,6 @@ const AnalysisResults = ({ prediction, originalImageUrl, isLoading, error }: Ana
   }
 
   if (!prediction) {
-    // ... (kode !prediction sama seperti sebelumnya) ...
     return (
       <div className="flex flex-col justify-center items-center p-12 text-center bg-yellow-50 border border-yellow-200 rounded-lg min-h-[300px]">
         <InfoIcon size={48} className="text-yellow-500 mb-4" />
@@ -76,7 +83,20 @@ const AnalysisResults = ({ prediction, originalImageUrl, isLoading, error }: Ana
     );
   }
 
-  const isNormal = prediction.detected_class?.toLowerCase().includes("normal");
+  const isHealthy = prediction.severity === 'healthy';
+  const severityColors = {
+    healthy: 'text-green-700',
+    mild: 'text-yellow-700',
+    moderate: 'text-orange-700',
+    severe: 'text-red-700'
+  };
+
+  const severityBgColors = {
+    healthy: 'bg-green-50 border-green-200',
+    mild: 'bg-yellow-50 border-yellow-200',
+    moderate: 'bg-orange-50 border-orange-200',
+    severe: 'bg-red-50 border-red-200'
+  };
 
   return (
     <div className={`animate-fade-in ${showContent ? 'opacity-100' : 'opacity-0'}`}>
@@ -94,7 +114,7 @@ const AnalysisResults = ({ prediction, originalImageUrl, isLoading, error }: Ana
           </div>
         )}
         <div className={`bg-white shadow-lg rounded-lg p-4 ${!originalImageUrl ? 'lg:col-span-2' : ''}`}>
-          <h3 className="text-lg font-semibold text-gray-700 mb-3">Gambar Hasil Analisis (Segmentasi)</h3>
+          <h3 className="text-lg font-semibold text-gray-700 mb-3">Hasil Segmentasi AI</h3>
           <div className="aspect-square overflow-hidden rounded flex items-center justify-center bg-gray-100">
             <img
               src={prediction.processed_image}
@@ -105,57 +125,104 @@ const AnalysisResults = ({ prediction, originalImageUrl, isLoading, error }: Ana
         </div>
       </div>
 
-      <div className="bg-white shadow-lg rounded-lg p-6">
+      {/* Legend */}
+      <div className="bg-white shadow-lg rounded-lg p-6 mb-6">
+        <h3 className="text-lg font-bold text-gray-800 mb-4 flex items-center">
+          <Eye size={20} className="mr-2 text-blue-500" />
+          Legenda Warna Segmentasi
+        </h3>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div className="flex items-center space-x-2">
+            <div className="w-4 h-4 bg-green-500 rounded"></div>
+            <span className="text-sm">{prediction.legend.tooth}</span>
+          </div>
+          <div className="flex items-center space-x-2">
+            <div className="w-4 h-4 bg-yellow-500 rounded"></div>
+            <span className="text-sm">{prediction.legend.caries}</span>
+          </div>
+          <div className="flex items-center space-x-2">
+            <div className="w-4 h-4 bg-red-500 rounded"></div>
+            <span className="text-sm">{prediction.legend.cavity}</span>
+          </div>
+          <div className="flex items-center space-x-2">
+            <div className="w-4 h-4 bg-orange-500 rounded"></div>
+            <span className="text-sm">{prediction.legend.crack}</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Main Results */}
+      <div className={`shadow-lg rounded-lg p-6 mb-6 border ${severityBgColors[prediction.severity]}`}>
         <h3 className="text-xl font-bold text-gray-800 mb-4">Kesimpulan Analisis</h3>
         <div className="flex items-start space-x-3 mb-4">
           <div className="flex-shrink-0 pt-1">
-            {isNormal ? (
+            {isHealthy ? (
               <CheckCircle size={28} className="text-green-500" />
             ) : (
               <AlertTriangle size={28} className="text-orange-500" />
             )}
           </div>
           <div>
-            <p className={`text-lg font-semibold ${isNormal ? "text-green-700" : "text-orange-700"}`}>
-              {prediction.detected_class || "Tidak ada kelas spesifik terdeteksi."}
+            <p className={`text-lg font-semibold ${severityColors[prediction.severity]}`}>
+              {prediction.detected_class}
             </p>
             <p className="text-sm text-gray-600 mt-1">
-              Model AI telah melakukan segmentasi pada gambar gigi Anda.
+              Tingkat Keparahan: <span className={`font-medium ${severityColors[prediction.severity]}`}>
+                {prediction.severity.charAt(0).toUpperCase() + prediction.severity.slice(1)}
+              </span>
+            </p>
+            <p className="text-sm text-gray-600 mt-1">
+              Kondisi Dominan: <span className="font-medium">
+                {prediction.dominant_condition.charAt(0).toUpperCase() + prediction.dominant_condition.slice(1)}
+              </span>
             </p>
           </div>
         </div>
+      </div>
 
-        {/* Tampilkan Persentase Anomali Umum */}
-        {!isNormal && typeof prediction.anomaly_percentage === 'number' && prediction.anomaly_percentage > 0 && (
-          <div className="mt-4 pt-4 border-t border-gray-200">
-            <h4 className="text-md font-semibold text-gray-700 mb-2 flex items-center">
-              <Percent size={20} className="mr-2 text-blue-500" />
-              Estimasi Area Anomali Terdeteksi:
-            </h4>
-            <p className="text-2xl font-bold text-blue-600">
-              {prediction.anomaly_percentage.toFixed(2)}%
-            </p>
-            <p className="text-xs text-gray-500 mt-1">
-              Persentase ini menunjukkan besarnya area yang ditandai oleh model AI dibandingkan total area gambar.
-            </p>
-          </div>
-        )}
+      {/* Detailed Percentages */}
+      <div className="bg-white shadow-lg rounded-lg p-6">
+        <h4 className="text-lg font-semibold text-gray-700 mb-4 flex items-center">
+          <Percent size={20} className="mr-2 text-blue-500" />
+          Persentase Detail per Kelas
+        </h4>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+          {Object.entries(prediction.class_percentages).map(([className, percentage]) => {
+            const colorMap = {
+              tooth: 'bg-green-100 text-green-800 border-green-200',
+              caries: 'bg-yellow-100 text-yellow-800 border-yellow-200',
+              cavity: 'bg-red-100 text-red-800 border-red-200',
+              crack: 'bg-orange-100 text-orange-800 border-orange-200'
+            };
+            
+            return (
+              <div key={className} className={`p-4 rounded-lg border ${colorMap[className as keyof typeof colorMap]}`}>
+                <div className="flex items-center justify-between mb-2">
+                  <span className="font-medium capitalize">{className}</span>
+                  <Activity size={16} />
+                </div>
+                <div className="text-2xl font-bold">{percentage.toFixed(2)}%</div>
+                <div className="text-xs opacity-75">
+                  {prediction.class_pixel_counts[className as keyof typeof prediction.class_pixel_counts]} pixels
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        
+        <div className="mt-6 pt-4 border-t border-gray-200">
+          <p className="text-xs text-gray-500">
+            <strong>Catatan:</strong> Persentase menunjukkan proporsi area yang terdeteksi untuk setiap kondisi dental. 
+            Warna pada gambar segmentasi sesuai dengan legenda di atas.
+          </p>
+        </div>
+      </div>
 
-        {/* Tempat untuk menampilkan persentase per kelas jika sudah ada
-        {prediction.class_percentages && (
-          <div className="mt-4 pt-4 border-t border-gray-200">
-            <h4 className="text-md font-semibold text-gray-700 mb-2">Detail Persentase per Kelas (Contoh):</h4>
-            <ul>
-              {Object.entries(prediction.class_percentages).map(([key, value]) => (
-                value > 0 && <li key={key} className="text-sm text-gray-600">{`${key.charAt(0).toUpperCase() + key.slice(1)}: ${value.toFixed(2)}%`}</li>
-              ))}
-            </ul>
-          </div>
-        )}
-        */}
-
-        <p className="text-xs text-gray-500 mt-6 pt-4 border-t border-gray-200">
-          <strong>Penting:</strong> Aplikasi ini adalah alat bantu edukasi dan skrining awal, bukan pengganti diagnosis medis profesional. Untuk diagnosis dan perawatan yang akurat, selalu konsultasikan dengan dokter gigi Anda.
+      <div className="mt-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+        <p className="text-xs text-blue-700">
+          <strong>Penting:</strong> Aplikasi ini adalah alat bantu edukasi dan skrining awal menggunakan AI, 
+          bukan pengganti diagnosis medis profesional. Untuk diagnosis dan perawatan yang akurat, 
+          selalu konsultasikan dengan dokter gigi Anda.
         </p>
       </div>
     </div>

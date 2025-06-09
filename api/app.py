@@ -9,7 +9,7 @@ import base64
 from tensorflow.keras.preprocessing.image import img_to_array
 import datetime
 
-from model import load_unet_model # Pastikan model.py Anda benar
+from model import load_unet_model
 
 app = Flask(__name__)
 CORS(app)
@@ -18,12 +18,31 @@ MODEL_PATH = 'models/unet_dental_segmentation.h5'
 IMAGE_SIZE = (128, 128)
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg'}
 
+# Class mapping for multi-class segmentation
+CLASS_NAMES = {
+    0: 'background',
+    1: 'tooth',
+    2: 'caries',
+    3: 'cavity',
+    4: 'crack'
+}
+
+# Color mapping for visualization
+CLASS_COLORS = {
+    0: (0, 0, 0),        # background - black
+    1: (0, 255, 0),      # tooth - green
+    2: (255, 255, 0),    # caries - yellow
+    3: (255, 0, 0),      # cavity - red
+    4: (255, 165, 0)     # crack - orange
+}
+
 model = None
 try:
     if not os.path.exists(MODEL_PATH):
         print(f"ERROR: Model file not found at {MODEL_PATH}")
     else:
         model = load_unet_model(MODEL_PATH)
+        print(f"Model loaded successfully from {MODEL_PATH}")
 except Exception as e:
     print(f"Failed to initialize model system: {e}")
 
@@ -42,68 +61,84 @@ def preprocess_image(image_bytes, target_size):
         print(f"Error in preprocessing image: {e}")
         raise
 
-def analyze_mask_for_percentage(mask_array_binary, total_pixels):
+def analyze_multiclass_segmentation(predicted_mask, total_pixels):
     """
-    Menganalisis masker biner untuk klasifikasi umum dan persentase area anomali.
+    Analyze multi-class segmentation mask to get percentages for each class.
     """
-    mask_uint8 = (mask_array_binary * 255).astype(np.uint8)
-    contours, _ = cv2.findContours(mask_uint8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-    analysis_results = {
-        "detected_class": "Normal / No significant features detected",
-        "contour_color_name": "N/A",
-        "anomaly_percentage": 0.0,
-        # Tempat untuk persentase per kelas di masa depan:
-        # "class_percentages": {
-        # "tooth": 0.0, "caries": 0.0, "cavity": 0.0, "crack": 0.0
-        # }
+    # Convert probabilities to class predictions
+    predicted_classes = np.argmax(predicted_mask, axis=-1)
+    
+    # Calculate percentages for each class
+    class_percentages = {}
+    class_pixel_counts = {}
+    
+    for class_id, class_name in CLASS_NAMES.items():
+        if class_name == 'background':
+            continue
+            
+        pixel_count = np.sum(predicted_classes == class_id)
+        percentage = (pixel_count / total_pixels) * 100
+        
+        class_percentages[class_name] = round(percentage, 2)
+        class_pixel_counts[class_name] = int(pixel_count)
+    
+    # Determine overall condition
+    max_class = max(class_percentages.items(), key=lambda x: x[1])
+    
+    if max_class[1] < 1.0:  # Less than 1% of any pathological condition
+        detected_class = "Healthy - No significant dental issues detected"
+        severity = "healthy"
+    elif max_class[0] == 'tooth':
+        detected_class = "Normal tooth structure detected"
+        severity = "healthy"
+    else:
+        detected_class = f"Dental condition detected: {max_class[0].capitalize()}"
+        if max_class[1] < 5:
+            severity = "mild"
+        elif max_class[1] < 15:
+            severity = "moderate"
+        else:
+            severity = "severe"
+    
+    return {
+        "detected_class": detected_class,
+        "severity": severity,
+        "class_percentages": class_percentages,
+        "class_pixel_counts": class_pixel_counts,
+        "dominant_condition": max_class[0] if max_class[1] > 1.0 else "healthy"
     }
 
-    if not contours:
-        return analysis_results
-
-    # Gabungkan semua kontur jika ada beberapa area terdeteksi sebagai "anomali" oleh model biner
-    total_anomaly_area = 0
-    for contour in contours:
-        total_anomaly_area += cv2.contourArea(contour)
-    
-    min_area_threshold = total_pixels * 0.003 # Anomali harus lebih dari 0.3% total area gambar
-
-    if total_anomaly_area > min_area_threshold:
-        analysis_results["detected_class"] = "Anomaly Detected"
-        analysis_results["contour_color_name"] = "Red"
-        analysis_results["anomaly_percentage"] = round((total_anomaly_area / total_pixels) * 100, 2)
-    else:
-        analysis_results["detected_class"] = "Normal / Features too small or not significant"
-        # anomaly_percentage tetap 0.0 jika di bawah threshold signifikan
-
-    # CATATAN PENTING:
-    # Untuk mendapatkan persentase "tooth, caries, cavity, crack", Anda memerlukan:
-    # 1. Model segmentasi multi-kelas yang outputnya adalah masker dengan nilai berbeda untuk tiap kelas.
-    # 2. Logika di sini untuk menghitung area untuk setiap nilai/kelas tersebut.
-    # Contoh (jika model multi-kelas):
-    # mask_multiclass = model.predict(...) -> hasilnya array dengan nilai misal 0=bg, 1=tooth, 2=caries, dst.
-    # for class_value, class_name in class_map.items():
-    # area_class = np.sum(mask_multiclass == class_value)
-    # analysis_results["class_percentages"][class_name] = (area_class / total_pixels) * 100
-    
-    return analysis_results
-
-
-def create_overlay_image(original_image_pil, predicted_mask_binary, overlay_color_tuple=(255, 0, 0), alpha=0.4):
+def create_multiclass_overlay(original_image_pil, predicted_mask, alpha=0.6):
+    """
+    Create overlay image with different colors for each class.
+    """
     original_resized_pil = original_image_pil.resize(IMAGE_SIZE, Image.LANCZOS)
-    mask_colored_np = np.zeros((*IMAGE_SIZE, 3), dtype=np.uint8)
-    mask_colored_np[predicted_mask_binary == 1] = overlay_color_tuple
-    mask_colored_pil = Image.fromarray(mask_colored_np, 'RGB')
+    original_array = np.array(original_resized_pil)
     
-    overlayed_image_pil = Image.blend(original_resized_pil, mask_colored_pil, alpha=alpha)
+    # Get class predictions
+    predicted_classes = np.argmax(predicted_mask, axis=-1)
     
-    final_image_np = np.array(original_resized_pil)
-    final_image_np[predicted_mask_binary == 1] = np.array(overlayed_image_pil)[predicted_mask_binary == 1]
-    final_overlay_pil = Image.fromarray(final_image_np)
-    return final_overlay_pil
-
-analysis_history_dummy = []
+    # Create colored overlay
+    overlay = np.zeros_like(original_array)
+    
+    for class_id, color in CLASS_COLORS.items():
+        if class_id == 0:  # Skip background
+            continue
+        mask = predicted_classes == class_id
+        overlay[mask] = color
+    
+    # Blend original image with overlay
+    result = original_array.copy()
+    
+    # Only apply overlay where there are non-background predictions
+    non_bg_mask = predicted_classes > 0
+    if np.any(non_bg_mask):
+        result[non_bg_mask] = (
+            (1 - alpha) * original_array[non_bg_mask] + 
+            alpha * overlay[non_bg_mask]
+        ).astype(np.uint8)
+    
+    return Image.fromarray(result)
 
 @app.route('/predict_endpoint', methods=['POST'])
 def predict_endpoint_route():
@@ -122,42 +157,42 @@ def predict_endpoint_route():
             image_bytes = file.read()
             original_image_pil = Image.open(io.BytesIO(image_bytes)).convert("RGB")
             
+            # Preprocess image
             processed_image_array = preprocess_image(image_bytes, IMAGE_SIZE)
 
+            # Get model prediction
             predicted_mask_batch = model.predict(processed_image_array)
-            predicted_mask_single = predicted_mask_batch[0, :, :, 0]
-            predicted_mask_binary = (predicted_mask_single > 0.5).astype(np.uint8)
+            predicted_mask_single = predicted_mask_batch[0]  # Shape: (128, 128, num_classes)
 
+            # Calculate total pixels
             total_image_pixels = IMAGE_SIZE[0] * IMAGE_SIZE[1]
-            analysis_data = analyze_mask_for_percentage(predicted_mask_binary, total_image_pixels)
+            
+            # Analyze segmentation results
+            analysis_data = analyze_multiclass_segmentation(predicted_mask_single, total_image_pixels)
 
-            overlay_color = (255,0,0)
-            if analysis_data["contour_color_name"] == "N/A":
-                final_image_to_send_pil = original_image_pil.resize(IMAGE_SIZE, Image.LANCZOS)
-            else:
-                # Anda bisa menyesuaikan warna overlay berdasarkan analisis jika perlu
-                final_image_to_send_pil = create_overlay_image(original_image_pil, predicted_mask_binary, overlay_color_tuple=overlay_color)
+            # Create overlay visualization
+            final_image_to_send_pil = create_multiclass_overlay(original_image_pil, predicted_mask_single)
 
+            # Convert to base64
             buffered = io.BytesIO()
             final_image_to_send_pil.save(buffered, format="PNG")
             img_str_processed = base64.b64encode(buffered.getvalue()).decode()
 
+            # Prepare response
             response_data = {
                 'processed_image': 'data:image/png;base64,' + img_str_processed,
                 'detected_class': analysis_data["detected_class"],
-                'anomaly_percentage': analysis_data["anomaly_percentage"]
-                # Jika nanti ada class_percentages, tambahkan di sini:
-                # 'class_percentages': analysis_data["class_percentages"]
+                'severity': analysis_data["severity"],
+                'class_percentages': analysis_data["class_percentages"],
+                'class_pixel_counts': analysis_data["class_pixel_counts"],
+                'dominant_condition': analysis_data["dominant_condition"],
+                'legend': {
+                    'tooth': 'Green - Normal tooth structure',
+                    'caries': 'Yellow - Dental caries detected',
+                    'cavity': 'Red - Cavity formation',
+                    'crack': 'Orange - Tooth crack/fracture'
+                }
             }
-            
-            history_entry = {
-                "id": str(len(analysis_history_dummy) + 1),
-                "date": datetime.datetime.now().isoformat(),
-                "processed_image_preview": 'data:image/png;base64,' + img_str_processed,
-                "detected_class": analysis_data["detected_class"],
-                "anomaly_percentage": analysis_data["anomaly_percentage"]
-            }
-            analysis_history_dummy.insert(0, history_entry)
                 
             return jsonify(response_data)
 
@@ -169,9 +204,13 @@ def predict_endpoint_route():
     else:
         return jsonify({'error': 'Tipe file tidak diizinkan. Gunakan PNG, JPG, atau JPEG.'}), 400
 
-@app.route('/history', methods=['GET'])
-def get_analysis_history():
-    return jsonify(analysis_history_dummy)
+@app.route('/health', methods=['GET'])
+def health_check():
+    return jsonify({
+        'status': 'healthy',
+        'model_loaded': model is not None,
+        'timestamp': datetime.datetime.now().isoformat()
+    })
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))

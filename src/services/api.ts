@@ -1,25 +1,42 @@
-// src/services/api.ts
-
 import axios from 'axios';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000';
 
-// Interface dari backend U-Net (sudah ada atau sesuaikan)
-export interface UnetApiResponse {
+export interface MultiClassApiResponse {
   processed_image: string;
   detected_class: string;
+  severity: 'healthy' | 'mild' | 'moderate' | 'severe';
+  class_percentages: {
+    tooth: number;
+    caries: number;
+    cavity: number;
+    crack: number;
+  };
+  class_pixel_counts: {
+    tooth: number;
+    caries: number;
+    cavity: number;
+    crack: number;
+  };
+  dominant_condition: string;
+  legend: {
+    tooth: string;
+    caries: string;
+    cavity: string;
+    crack: string;
+  };
 }
 
 export interface ApiError {
   error: string;
 }
 
-export const uploadImage = async (file: File): Promise<UnetApiResponse> => {
+export const uploadImage = async (file: File): Promise<MultiClassApiResponse> => {
   const formData = new FormData();
   formData.append('file', file);
 
   try {
-    const response = await axios.post<UnetApiResponse>(`${API_BASE_URL}/predict_endpoint`, formData, { // Pastikan nama endpoint benar
+    const response = await axios.post<MultiClassApiResponse>(`${API_BASE_URL}/predict_endpoint`, formData, {
       headers: {
         'Content-Type': 'multipart/form-data',
       },
@@ -33,25 +50,14 @@ export const uploadImage = async (file: File): Promise<UnetApiResponse> => {
   }
 };
 
-// --- TAMBAHKAN BAGIAN INI UNTUK getHistory ---
-export interface HistoryEntry {
-  id: string;
-  date: string; // ISO string date
-  processed_image_preview: string; // Base64 preview
-  detected_class: string;
-  // Tambahkan field lain jika backend Anda menyediakannya (misal, original_image_url jika disimpan)
-}
-
-export const getHistory = async (): Promise<HistoryEntry[]> => {
+export const checkHealth = async () => {
   try {
-    const response = await axios.get<HistoryEntry[]>(`${API_BASE_URL}/history`);
+    const response = await axios.get(`${API_BASE_URL}/health`);
     return response.data;
   } catch (error) {
     if (axios.isAxiosError(error) && error.response) {
-      throw error.response.data as ApiError; // Lempar error dari API jika ada
+      throw error.response.data as ApiError;
     }
-    // Untuk error jaringan atau lainnya
-    throw { error: 'Failed to fetch analysis history.' } as ApiError;
+    throw { error: 'Failed to check server health' } as ApiError;
   }
 };
-// --- AKHIR TAMBAHAN ---

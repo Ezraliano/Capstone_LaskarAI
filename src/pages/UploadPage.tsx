@@ -2,11 +2,8 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import UploadArea from '../components/UploadArea';
 import { Bluetooth as Tooth } from 'lucide-react';
-import { uploadImage } from '../services/api';
-// Define UnetApiResponse type locally if not available from api.ts
-type UnetApiResponse = object; // Replace '{}' with 'object' to satisfy lint rules
+import { uploadImage, MultiClassApiResponse } from '../services/api';
 
-// Define ApiError type if not imported from elsewhere
 type ApiError = {
   error?: string;
 };
@@ -17,10 +14,6 @@ const UploadPage = () => {
   const [originalImageUrl, setOriginalImageUrl] = useState<string | undefined>(undefined);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  // For compatibility with the rest of the code
-  const file = selectedFile;
-  const isUploading = isLoading;
 
   const handleFileSelected = (file: File) => {
     setSelectedFile(file);
@@ -37,9 +30,9 @@ const UploadPage = () => {
     setIsLoading(true);
     setError(null);
     try {
-      const predictionResult: UnetApiResponse = await uploadImage(selectedFile);
+      const predictionResult: MultiClassApiResponse = await uploadImage(selectedFile);
 
-      navigate('/results', {
+      navigate('/results/latest', {
         state: {
           prediction: predictionResult,
           originalImage: originalImageUrl,
@@ -49,13 +42,14 @@ const UploadPage = () => {
       });
     } catch (err) {
       const apiError = err as ApiError;
-      setError(apiError.error || 'Gagal menganalisis gambar. Silakan coba lagi.');
-      navigate('/results', {
+      const errorMessage = apiError.error || 'Gagal menganalisis gambar. Silakan coba lagi.';
+      setError(errorMessage);
+      navigate('/results/error', {
         state: {
           prediction: undefined,
           originalImage: originalImageUrl,
           isLoading: false,
-          error: apiError.error || 'Gagal menganalisis gambar. Silakan coba lagi.',
+          error: errorMessage,
         },
       });
     } finally {
@@ -69,7 +63,7 @@ const UploadPage = () => {
         <div className="text-center mb-8">
           <h1 className="text-3xl font-bold mb-4">Upload Dental Image</h1>
           <p className="text-gray-600">
-            Upload a clear image of your teeth for AI analysis to detect potential dental issues.
+            Upload a clear image of your teeth for AI analysis to detect tooth structure, caries, cavities, and cracks.
           </p>
         </div>
 
@@ -83,16 +77,16 @@ const UploadPage = () => {
           </div>
         )}
 
-        {file && (
+        {selectedFile && (
           <div className="animate-fade-in card p-4 mb-8">
             <div className="flex items-center gap-4">
               <div className="w-16 h-16 bg-primary-50 rounded-lg flex items-center justify-center">
                 <Tooth size={24} className="text-primary-600" />
               </div>
               <div className="flex-grow">
-                <h3 className="font-medium">{file.name}</h3>
+                <h3 className="font-medium">{selectedFile.name}</h3>
                 <p className="text-gray-500 text-sm">
-                  {(file.size / 1024 / 1024).toFixed(2)} MB
+                  {(selectedFile.size / 1024 / 1024).toFixed(2)} MB
                 </p>
               </div>
             </div>
@@ -103,9 +97,9 @@ const UploadPage = () => {
           <button
             className="btn btn-primary"
             onClick={handleAnalyze}
-            disabled={!file || isUploading}
+            disabled={!selectedFile || isLoading}
           >
-            {isUploading ? (
+            {isLoading ? (
               <>
                 <span className="inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin mr-2"></span>
                 Processing...
@@ -114,6 +108,20 @@ const UploadPage = () => {
               'Analyze Image'
             )}
           </button>
+        </div>
+
+        {/* Information about the AI model */}
+        <div className="mt-8 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+          <h3 className="font-semibold text-blue-800 mb-2">Tentang Model AI</h3>
+          <p className="text-blue-700 text-sm">
+            Model AI kami menggunakan arsitektur U-Net untuk segmentasi gambar dental dan dapat mendeteksi 4 kelas:
+          </p>
+          <ul className="text-blue-700 text-sm mt-2 space-y-1">
+            <li>• <strong>Tooth:</strong> Struktur gigi normal</li>
+            <li>• <strong>Caries:</strong> Karies gigi (kerusakan awal)</li>
+            <li>• <strong>Cavity:</strong> Lubang pada gigi</li>
+            <li>• <strong>Crack:</strong> Retakan pada gigi</li>
+          </ul>
         </div>
       </div>
     </div>
