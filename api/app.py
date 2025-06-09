@@ -14,6 +14,7 @@ from model import load_unet_model
 app = Flask(__name__)
 CORS(app)
 
+# Updated model path to match your folder structure
 MODEL_PATH = 'models/unet_dental_segmentation.h5'
 IMAGE_SIZE = (128, 128)
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg'}
@@ -37,14 +38,31 @@ CLASS_COLORS = {
 }
 
 model = None
-try:
-    if not os.path.exists(MODEL_PATH):
-        print(f"ERROR: Model file not found at {MODEL_PATH}")
-    else:
+
+def initialize_model():
+    global model
+    try:
+        # Check if model file exists
+        if not os.path.exists(MODEL_PATH):
+            print(f"ERROR: Model file not found at {MODEL_PATH}")
+            print(f"Current working directory: {os.getcwd()}")
+            print(f"Files in current directory: {os.listdir('.')}")
+            if os.path.exists('models'):
+                print(f"Files in models directory: {os.listdir('models')}")
+            return False
+        
+        print(f"Loading model from {MODEL_PATH}...")
         model = load_unet_model(MODEL_PATH)
-        print(f"Model loaded successfully from {MODEL_PATH}")
-except Exception as e:
-    print(f"Failed to initialize model system: {e}")
+        print(f"✅ Model loaded successfully from {MODEL_PATH}")
+        return True
+    except Exception as e:
+        print(f"❌ Failed to initialize model: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+# Initialize model on startup
+model_loaded = initialize_model()
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
@@ -65,112 +83,172 @@ def analyze_multiclass_segmentation(predicted_mask, total_pixels):
     """
     Analyze multi-class segmentation mask to get percentages for each class.
     """
-    # Convert probabilities to class predictions
-    predicted_classes = np.argmax(predicted_mask, axis=-1)
-    
-    # Calculate percentages for each class
-    class_percentages = {}
-    class_pixel_counts = {}
-    
-    for class_id, class_name in CLASS_NAMES.items():
-        if class_name == 'background':
-            continue
-            
-        pixel_count = np.sum(predicted_classes == class_id)
-        percentage = (pixel_count / total_pixels) * 100
-        
-        class_percentages[class_name] = round(percentage, 2)
-        class_pixel_counts[class_name] = int(pixel_count)
-    
-    # Determine overall condition
-    max_class = max(class_percentages.items(), key=lambda x: x[1])
-    
-    if max_class[1] < 1.0:  # Less than 1% of any pathological condition
-        detected_class = "Healthy - No significant dental issues detected"
-        severity = "healthy"
-    elif max_class[0] == 'tooth':
-        detected_class = "Normal tooth structure detected"
-        severity = "healthy"
-    else:
-        detected_class = f"Dental condition detected: {max_class[0].capitalize()}"
-        if max_class[1] < 5:
-            severity = "mild"
-        elif max_class[1] < 15:
-            severity = "moderate"
+    try:
+        # Handle different output shapes from the model
+        if len(predicted_mask.shape) == 3:
+            # If output is (height, width, num_classes)
+            predicted_classes = np.argmax(predicted_mask, axis=-1)
+        elif len(predicted_mask.shape) == 2:
+            # If output is (height, width) - single channel
+            # Assume it's binary segmentation, convert to multi-class
+            predicted_classes = (predicted_mask > 0.5).astype(np.uint8)
         else:
-            severity = "severe"
-    
-    return {
-        "detected_class": detected_class,
-        "severity": severity,
-        "class_percentages": class_percentages,
-        "class_pixel_counts": class_pixel_counts,
-        "dominant_condition": max_class[0] if max_class[1] > 1.0 else "healthy"
-    }
+            raise ValueError(f"Unexpected mask shape: {predicted_mask.shape}")
+        
+        # Calculate percentages for each class
+        class_percentages = {}
+        class_pixel_counts = {}
+        
+        for class_id, class_name in CLASS_NAMES.items():
+            if class_name == 'background':
+                continue
+                
+            if len(predicted_mask.shape) == 3:
+                pixel_count = np.sum(predicted_classes == class_id)
+            else:
+                # For binary segmentation, treat non-zero as "tooth"
+                if class_name == 'tooth':
+                    pixel_count = np.sum(predicted_classes == 1)
+                else:
+                    pixel_count = 0
+            
+            percentage = (pixel_count / total_pixels) * 100
+            class_percentages[class_name] = round(percentage, 2)
+            class_pixel_counts[class_name] = int(pixel_count)
+        
+        # Determine overall condition
+        max_class = max(class_percentages.items(), key=lambda x: x[1])
+        
+        if max_class[1] < 1.0:  # Less than 1% of any pathological condition
+            detected_class = "Healthy - No significant dental issues detected"
+            severity = "healthy"
+        elif max_class[0] == 'tooth':
+            detected_class = "Normal tooth structure detected"
+            severity = "healthy"
+        else:
+            detected_class = f"Dental condition detected: {max_class[0].capitalize()}"
+            if max_class[1] < 5:
+                severity = "mild"
+            elif max_class[1] < 15:
+                severity = "moderate"
+            else:
+                severity = "severe"
+        
+        return {
+            "detected_class": detected_class,
+            "severity": severity,
+            "class_percentages": class_percentages,
+            "class_pixel_counts": class_pixel_counts,
+            "dominant_condition": max_class[0] if max_class[1] > 1.0 else "healthy"
+        }
+    except Exception as e:
+        print(f"Error in analyze_multiclass_segmentation: {e}")
+        raise
 
 def create_multiclass_overlay(original_image_pil, predicted_mask, alpha=0.6):
     """
     Create overlay image with different colors for each class.
     """
-    original_resized_pil = original_image_pil.resize(IMAGE_SIZE, Image.LANCZOS)
-    original_array = np.array(original_resized_pil)
-    
-    # Get class predictions
-    predicted_classes = np.argmax(predicted_mask, axis=-1)
-    
-    # Create colored overlay
-    overlay = np.zeros_like(original_array)
-    
-    for class_id, color in CLASS_COLORS.items():
-        if class_id == 0:  # Skip background
-            continue
-        mask = predicted_classes == class_id
-        overlay[mask] = color
-    
-    # Blend original image with overlay
-    result = original_array.copy()
-    
-    # Only apply overlay where there are non-background predictions
-    non_bg_mask = predicted_classes > 0
-    if np.any(non_bg_mask):
-        result[non_bg_mask] = (
-            (1 - alpha) * original_array[non_bg_mask] + 
-            alpha * overlay[non_bg_mask]
-        ).astype(np.uint8)
-    
-    return Image.fromarray(result)
+    try:
+        original_resized_pil = original_image_pil.resize(IMAGE_SIZE, Image.LANCZOS)
+        original_array = np.array(original_resized_pil)
+        
+        # Handle different output shapes
+        if len(predicted_mask.shape) == 3:
+            predicted_classes = np.argmax(predicted_mask, axis=-1)
+        else:
+            predicted_classes = (predicted_mask > 0.5).astype(np.uint8)
+        
+        # Create colored overlay
+        overlay = np.zeros_like(original_array)
+        
+        if len(predicted_mask.shape) == 3:
+            # Multi-class segmentation
+            for class_id, color in CLASS_COLORS.items():
+                if class_id == 0:  # Skip background
+                    continue
+                mask = predicted_classes == class_id
+                overlay[mask] = color
+        else:
+            # Binary segmentation - use green for detected areas
+            mask = predicted_classes == 1
+            overlay[mask] = CLASS_COLORS[1]  # Green for tooth
+        
+        # Blend original image with overlay
+        result = original_array.copy()
+        
+        # Only apply overlay where there are non-background predictions
+        non_bg_mask = predicted_classes > 0
+        if np.any(non_bg_mask):
+            result[non_bg_mask] = (
+                (1 - alpha) * original_array[non_bg_mask] + 
+                alpha * overlay[non_bg_mask]
+            ).astype(np.uint8)
+        
+        return Image.fromarray(result)
+    except Exception as e:
+        print(f"Error in create_multiclass_overlay: {e}")
+        raise
+
+@app.route('/health', methods=['GET'])
+def health_check():
+    return jsonify({
+        'status': 'healthy',
+        'model_loaded': model is not None,
+        'model_path': MODEL_PATH,
+        'model_exists': os.path.exists(MODEL_PATH),
+        'current_directory': os.getcwd(),
+        'timestamp': datetime.datetime.now().isoformat()
+    })
 
 @app.route('/predict_endpoint', methods=['POST'])
 def predict_endpoint_route():
+    print("🔄 Received prediction request")
+    
     if model is None:
-        return jsonify({'error': 'Model tidak dapat dimuat. Silakan periksa log server.'}), 500
+        error_msg = 'Model tidak dapat dimuat. Silakan periksa log server dan pastikan file model ada.'
+        print(f"❌ {error_msg}")
+        return jsonify({'error': error_msg}), 500
 
     if 'file' not in request.files:
-        return jsonify({'error': 'Tidak ada file dalam permintaan.'}), 400
+        error_msg = 'Tidak ada file dalam permintaan.'
+        print(f"❌ {error_msg}")
+        return jsonify({'error': error_msg}), 400
 
     file = request.files['file']
     if file.filename == '':
-        return jsonify({'error': 'Tidak ada file yang dipilih untuk diunggah.'}), 400
+        error_msg = 'Tidak ada file yang dipilih untuk diunggah.'
+        print(f"❌ {error_msg}")
+        return jsonify({'error': error_msg}), 400
 
     if file and allowed_file(file.filename):
         try:
+            print(f"📁 Processing file: {file.filename}")
+            
+            # Read and process image
             image_bytes = file.read()
             original_image_pil = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+            print(f"📷 Original image size: {original_image_pil.size}")
             
             # Preprocess image
             processed_image_array = preprocess_image(image_bytes, IMAGE_SIZE)
+            print(f"🔄 Preprocessed image shape: {processed_image_array.shape}")
 
             # Get model prediction
+            print("🤖 Running model prediction...")
             predicted_mask_batch = model.predict(processed_image_array)
-            predicted_mask_single = predicted_mask_batch[0]  # Shape: (128, 128, num_classes)
+            predicted_mask_single = predicted_mask_batch[0]
+            print(f"📊 Prediction output shape: {predicted_mask_single.shape}")
 
             # Calculate total pixels
             total_image_pixels = IMAGE_SIZE[0] * IMAGE_SIZE[1]
             
             # Analyze segmentation results
+            print("📈 Analyzing segmentation results...")
             analysis_data = analyze_multiclass_segmentation(predicted_mask_single, total_image_pixels)
 
             # Create overlay visualization
+            print("🎨 Creating overlay visualization...")
             final_image_to_send_pil = create_multiclass_overlay(original_image_pil, predicted_mask_single)
 
             # Convert to base64
@@ -193,25 +271,25 @@ def predict_endpoint_route():
                     'crack': 'Orange - Tooth crack/fracture'
                 }
             }
-                
+            
+            print("✅ Analysis completed successfully")
             return jsonify(response_data)
 
         except Exception as e:
             import traceback
-            print(f"Error during prediction processing: {e}")
+            error_msg = f'Terjadi kesalahan saat memproses gambar: {str(e)}'
+            print(f"❌ {error_msg}")
             traceback.print_exc()
-            return jsonify({'error': f'Terjadi kesalahan saat memproses gambar di server: {str(e)}'}), 500
+            return jsonify({'error': error_msg}), 500
     else:
-        return jsonify({'error': 'Tipe file tidak diizinkan. Gunakan PNG, JPG, atau JPEG.'}), 400
-
-@app.route('/health', methods=['GET'])
-def health_check():
-    return jsonify({
-        'status': 'healthy',
-        'model_loaded': model is not None,
-        'timestamp': datetime.datetime.now().isoformat()
-    })
+        error_msg = 'Tipe file tidak diizinkan. Gunakan PNG, JPG, atau JPEG.'
+        print(f"❌ {error_msg}")
+        return jsonify({'error': error_msg}), 400
 
 if __name__ == '__main__':
+    print("🚀 Starting Flask server...")
+    print(f"📁 Current working directory: {os.getcwd()}")
+    print(f"🤖 Model loaded: {model is not None}")
+    
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=True)

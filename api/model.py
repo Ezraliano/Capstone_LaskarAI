@@ -1,11 +1,10 @@
 import tensorflow as tf
 from tensorflow.keras.models import load_model
 from tensorflow.keras.utils import custom_object_scope
-import numpy as np # Meskipun tidak digunakan langsung di sini, seringkali berguna
+import numpy as np
 
-# Ini adalah fungsi custom yang mungkin Anda gunakan saat melatih model U-Net
-# Pastikan definisinya sama dengan yang Anda gunakan saat training jika model disimpan dengan custom objects
-def dice_coef(y_true, y_pred, smooth=1e-6): # Ditambahkan smooth untuk stabilitas
+# Custom functions that might be used in your U-Net model
+def dice_coef(y_true, y_pred, smooth=1e-6):
     y_true_f = tf.keras.backend.flatten(y_true)
     y_pred_f = tf.keras.backend.flatten(y_pred)
     intersection = tf.keras.backend.sum(y_true_f * y_pred_f)
@@ -14,19 +13,47 @@ def dice_coef(y_true, y_pred, smooth=1e-6): # Ditambahkan smooth untuk stabilita
 def dice_loss(y_true, y_pred):
     return 1 - dice_coef(y_true, y_pred)
 
+def iou_coef(y_true, y_pred, smooth=1e-6):
+    y_true_f = tf.keras.backend.flatten(y_true)
+    y_pred_f = tf.keras.backend.flatten(y_pred)
+    intersection = tf.keras.backend.sum(y_true_f * y_pred_f)
+    union = tf.keras.backend.sum(y_true_f) + tf.keras.backend.sum(y_pred_f) - intersection
+    return (intersection + smooth) / (union + smooth)
+
 def load_unet_model(model_path):
     """
-    Memuat model U-Net dengan custom objects jika diperlukan.
+    Load U-Net model with custom objects if needed.
     """
     try:
-        # Jika model Anda dilatih dengan custom metrics/losses seperti dice_coef atau dice_loss,
-        # Anda perlu menyertakannya dalam custom_object_scope.
-        # Sesuaikan dictionary ini jika nama fungsi Anda berbeda atau ada custom objects lain.
-        with custom_object_scope({'dice_coef': dice_coef, 'dice_loss': dice_loss}):
-            model = load_model(model_path)
-        print(f"Model loaded successfully from {model_path}")
+        print(f"🔄 Attempting to load model from: {model_path}")
+        
+        # Try loading with custom objects first
+        custom_objects = {
+            'dice_coef': dice_coef,
+            'dice_loss': dice_loss,
+            'iou_coef': iou_coef
+        }
+        
+        with custom_object_scope(custom_objects):
+            model = load_model(model_path, compile=False)
+        
+        print(f"✅ Model loaded successfully with custom objects")
+        print(f"📊 Model input shape: {model.input_shape}")
+        print(f"📊 Model output shape: {model.output_shape}")
+        
         return model
+        
     except Exception as e:
-        print(f"Error loading U-Net model from {model_path}: {e}")
-        # Anda bisa memilih untuk raise error lagi atau mengembalikan None dan ditangani di app.py
-        raise e # Lebih baik di-raise agar app.py tahu ada masalah serius
+        print(f"⚠️ Failed to load with custom objects: {e}")
+        
+        # Try loading without custom objects
+        try:
+            print("🔄 Trying to load without custom objects...")
+            model = load_model(model_path, compile=False)
+            print(f"✅ Model loaded successfully without custom objects")
+            print(f"📊 Model input shape: {model.input_shape}")
+            print(f"📊 Model output shape: {model.output_shape}")
+            return model
+        except Exception as e2:
+            print(f"❌ Failed to load model completely: {e2}")
+            raise e2

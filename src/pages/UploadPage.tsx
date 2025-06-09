@@ -1,8 +1,8 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import UploadArea from '../components/UploadArea';
-import { Bluetooth as Tooth } from 'lucide-react';
-import { uploadImage, MultiClassApiResponse } from '../services/api';
+import { Bluetooth as Tooth, AlertCircle, CheckCircle } from 'lucide-react';
+import { uploadImage, checkHealth, MultiClassApiResponse } from '../services/api';
 
 type ApiError = {
   error?: string;
@@ -14,6 +14,22 @@ const UploadPage = () => {
   const [originalImageUrl, setOriginalImageUrl] = useState<string | undefined>(undefined);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [serverStatus, setServerStatus] = useState<'checking' | 'online' | 'offline'>('checking');
+
+  // Check server health on component mount
+  useEffect(() => {
+    const checkServerHealth = async () => {
+      try {
+        await checkHealth();
+        setServerStatus('online');
+      } catch (error) {
+        setServerStatus('offline');
+        console.error('Server health check failed:', error);
+      }
+    };
+
+    checkServerHealth();
+  }, []);
 
   const handleFileSelected = (file: File) => {
     setSelectedFile(file);
@@ -27,10 +43,18 @@ const UploadPage = () => {
       return;
     }
 
+    if (serverStatus === 'offline') {
+      setError('Server Flask API tidak dapat dijangkau. Pastikan server berjalan di http://localhost:5000');
+      return;
+    }
+
     setIsLoading(true);
     setError(null);
+    
     try {
+      console.log('🔄 Starting image analysis...');
       const predictionResult: MultiClassApiResponse = await uploadImage(selectedFile);
+      console.log('✅ Analysis completed:', predictionResult);
 
       navigate('/results/latest', {
         state: {
@@ -43,7 +67,9 @@ const UploadPage = () => {
     } catch (err) {
       const apiError = err as ApiError;
       const errorMessage = apiError.error || 'Gagal menganalisis gambar. Silakan coba lagi.';
+      console.error('❌ Analysis failed:', errorMessage);
       setError(errorMessage);
+      
       navigate('/results/error', {
         state: {
           prediction: undefined,
@@ -57,6 +83,17 @@ const UploadPage = () => {
     }
   };
 
+  const retryServerConnection = async () => {
+    setServerStatus('checking');
+    try {
+      await checkHealth();
+      setServerStatus('online');
+      setError(null);
+    } catch (error) {
+      setServerStatus('offline');
+    }
+  };
+
   return (
     <div className="container mx-auto px-4 sm:px-6 lg:px-8 py-12 animate-fade-in">
       <div className="max-w-3xl mx-auto">
@@ -67,13 +104,68 @@ const UploadPage = () => {
           </p>
         </div>
 
+        {/* Server Status Indicator */}
+        <div className="mb-6">
+          <div className={`p-4 rounded-lg border flex items-center justify-between ${
+            serverStatus === 'online' 
+              ? 'bg-green-50 border-green-200' 
+              : serverStatus === 'offline'
+              ? 'bg-red-50 border-red-200'
+              : 'bg-yellow-50 border-yellow-200'
+          }`}>
+            <div className="flex items-center space-x-2">
+              {serverStatus === 'online' && <CheckCircle size={20} className="text-green-600" />}
+              {serverStatus === 'offline' && <AlertCircle size={20} className="text-red-600" />}
+              {serverStatus === 'checking' && (
+                <div className="w-5 h-5 border-2 border-yellow-600 border-t-transparent rounded-full animate-spin" />
+              )}
+              <span className={`font-medium ${
+                serverStatus === 'online' 
+                  ? 'text-green-700' 
+                  : serverStatus === 'offline'
+                  ? 'text-red-700'
+                  : 'text-yellow-700'
+              }`}>
+                Server Status: {
+                  serverStatus === 'online' ? 'Online' :
+                  serverStatus === 'offline' ? 'Offline' : 'Checking...'
+                }
+              </span>
+            </div>
+            {serverStatus === 'offline' && (
+              <button
+                onClick={retryServerConnection}
+                className="text-sm bg-red-100 hover:bg-red-200 text-red-700 px-3 py-1 rounded"
+              >
+                Retry Connection
+              </button>
+            )}
+          </div>
+          
+          {serverStatus === 'offline' && (
+            <div className="mt-2 p-3 bg-red-50 border border-red-200 rounded text-sm text-red-700">
+              <strong>Troubleshooting:</strong>
+              <ol className="mt-1 ml-4 list-decimal">
+                <li>Pastikan Flask API berjalan dengan menjalankan: <code className="bg-red-100 px-1 rounded">python api/app.py</code></li>
+                <li>Periksa apakah server berjalan di <code className="bg-red-100 px-1 rounded">http://localhost:5000</code></li>
+                <li>Pastikan file model <code className="bg-red-100 px-1 rounded">unet_dental_segmentation.h5</code> ada di folder <code className="bg-red-100 px-1 rounded">api/models/</code></li>
+              </ol>
+            </div>
+          )}
+        </div>
+
         <div className="mb-8">
           <UploadArea onFileSelected={handleFileSelected} />
         </div>
 
         {error && (
           <div className="mb-8 p-4 bg-red-50 border border-red-200 rounded-lg text-red-600">
-            {error}
+            <div className="flex items-start space-x-2">
+              <AlertCircle size={20} className="flex-shrink-0 mt-0.5" />
+              <div>
+                <strong>Error:</strong> {error}
+              </div>
+            </div>
           </div>
         )}
 
@@ -97,7 +189,7 @@ const UploadPage = () => {
           <button
             className="btn btn-primary"
             onClick={handleAnalyze}
-            disabled={!selectedFile || isLoading}
+            disabled={!selectedFile || isLoading || serverStatus !== 'online'}
           >
             {isLoading ? (
               <>
@@ -117,10 +209,10 @@ const UploadPage = () => {
             Model AI kami menggunakan arsitektur U-Net untuk segmentasi gambar dental dan dapat mendeteksi 4 kelas:
           </p>
           <ul className="text-blue-700 text-sm mt-2 space-y-1">
-            <li>• <strong>Tooth:</strong> Struktur gigi normal</li>
-            <li>• <strong>Caries:</strong> Karies gigi (kerusakan awal)</li>
-            <li>• <strong>Cavity:</strong> Lubang pada gigi</li>
-            <li>• <strong>Crack:</strong> Retakan pada gigi</li>
+            <li>• <strong>Tooth:</strong> Struktur gigi normal (Hijau)</li>
+            <li>• <strong>Caries:</strong> Karies gigi/kerusakan awal (Kuning)</li>
+            <li>• <strong>Cavity:</strong> Lubang pada gigi (Merah)</li>
+            <li>• <strong>Crack:</strong> Retakan pada gigi (Oranye)</li>
           </ul>
         </div>
       </div>
